@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from configs import configure_argument_parser, configure_logging
-from constants import MAIN_DOC_URL, PEPS_URL, EXPECTED_STATUS, DOWNLOADS_DIR
+from constants import MAIN_DOC_URL, PEPS_URL, EXPECTED_STATUS, BASE_DIR
 from outputs import control_output, file_output
 from utils import get_response, find_tag, select_tags, select_tag
 
@@ -75,12 +75,13 @@ def download(session):
     soup = get_soup(session, downloads_url)
     pdf_a4_link = select_tag(
         soup,
-        'div[role=main] table.docutils a[href$=.zip]'
+        'div[role="main"] table.docutils a[href$="pdf-a4.zip"]'
     )['href']
     archive_url = urljoin(downloads_url, pdf_a4_link)
     filename = archive_url.split('/')[-1]
-    DOWNLOADS_DIR.mkdir(exist_ok=True)
-    archive_path = DOWNLOADS_DIR / filename
+    downloads_dir = BASE_DIR / 'downloads'
+    downloads_dir.mkdir(exist_ok=True)
+    archive_path = downloads_dir / filename
     response = session.get(archive_url)
     with open(archive_path, 'wb') as file:
         file.write(response.content)
