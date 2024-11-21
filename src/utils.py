@@ -1,6 +1,8 @@
 from requests import RequestException
 from exceptions import ParserFindTagException, ParserSelectTagsException
 
+from bs4 import BeautifulSoup
+
 
 def get_response(session, url):
     try:
@@ -9,6 +11,15 @@ def get_response(session, url):
         return response
     except RequestException:
         raise ConnectionError(f'Ошибка при запросе страницы {url}')
+
+
+def get_soup(session, url):
+    response = get_response(session, url)
+    if response is None:
+        raise ValueError(f'Пустой ответ от {url}')
+    response.encoding = 'utf-8'
+    soup = BeautifulSoup(response.text, features='lxml')
+    return soup
 
 
 def find_tag(soup, tag, attrs=None):

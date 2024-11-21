@@ -4,23 +4,13 @@ from collections import defaultdict
 from urllib.parse import urljoin
 
 import requests_cache
-from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 from configs import configure_argument_parser, configure_logging
 from constants import MAIN_DOC_URL, PEPS_URL, EXPECTED_STATUS, BASE_DIR
+from exceptions import ParserFindTagException
 from outputs import control_output, file_output
-from utils import get_response, find_tag, select_tags, select_tag
-
-
-def get_soup(session, url):
-    response = get_response(session, url)
-    if response is None:
-        logging.error(f'Ошибка при запросе к {url}', stack_info=True)
-        return
-    response.encoding = 'utf-8'
-    soup = BeautifulSoup(response.text, features='lxml')
-    return soup
+from utils import get_soup, find_tag, select_tags, select_tag
 
 
 def whats_new(session):
@@ -31,19 +21,24 @@ def whats_new(session):
         '#what-s-new-in-python div.toctree-wrapper li.toctree-l1'
     )
     results = [('Ссылка на статью', 'Заголовок', 'Редактор, автор')]
+    errors = list()
     for section in tqdm(sections_by_python):
-        version_a_tag = find_tag(section, 'a')
-        href = version_a_tag['href']
-        version_link = urljoin(whats_new_url, href)
-        soup = get_soup(session, version_link)
-        results.append(
-            (
-                version_link,
-                find_tag(soup, 'h1').text,
-                find_tag(soup, 'dl').text.replace('\n', ' ')
+        try:
+            version_a_tag = find_tag(section, 'a')
+            href = version_a_tag['href']
+            version_link = urljoin(whats_new_url, href)
+            soup = get_soup(session, version_link)
+            results.append(
+                (
+                    version_link,
+                    find_tag(soup, 'h1').text,
+                    find_tag(soup, 'dl').text.replace('\n', ' ')
+                )
             )
-        )
-
+        except (ConnectionError, ValueError, ParserFindTagException) as error:
+            errors.append(error)
+    for error in errors:
+        logging.error(error)
     return results
 
 
@@ -93,34 +88,40 @@ def pep(session):
     pep_rows = select_tags(soup, 'tbody > tr')
     pep_statuses_count = defaultdict(int)
     pattern = r'Status:\n(?P<status>\w+)'
-    error_messages = list()
+    messages = list()
+    errors = list()
     for pep_row in tqdm(pep_rows):
-        if len(find_tag(pep_row, 'abbr').text) > 1:
-            pep_list_status = find_tag(pep_row, 'abbr').text[1:]
-        else:
-            pep_list_status = ''
-        pep_link = find_tag(pep_row, 'a')['href']
-        pep_page_url = urljoin(PEPS_URL, pep_link)
-        soup = get_soup(session, pep_page_url)
-        pep_page_info = find_tag(
-            soup,
-            'dl',
-            {'class': 'rfc2822 field-list simple'}
-        )
-        match = re.search(pattern, pep_page_info.text)
-        pep_status = match.group('status')
-        pep_statuses_count[pep_status] += 1
-        if pep_status not in EXPECTED_STATUS[pep_list_status]:
-            error_messages.append(
-                '\n'
-                'Несовпадающие статусы:\n'
-                f'{pep_page_url}\n'
-                f'Статус в карточке: {pep_status}\n'
-                f'Ожидаемые статусы: '
-                f'{EXPECTED_STATUS[pep_list_status]}\n'
+        try:
+            if len(find_tag(pep_row, 'abbr').text) > 1:
+                pep_list_status = find_tag(pep_row, 'abbr').text[1:]
+            else:
+                pep_list_status = ''
+            pep_link = find_tag(pep_row, 'a')['href']
+            pep_page_url = urljoin(PEPS_URL, pep_link)
+            soup = get_soup(session, pep_page_url)
+            pep_page_info = find_tag(
+                soup,
+                'dl',
+                {'class': 'rfc2822 field-list simple'}
             )
-    for error_message in error_messages:
-        logging.info(error_message)
+            match = re.search(pattern, pep_page_info.text)
+            pep_status = match.group('status')
+            pep_statuses_count[pep_status] += 1
+            if pep_status not in EXPECTED_STATUS[pep_list_status]:
+                messages.append(
+                    '\n'
+                    'Несовпадающие статусы:\n'
+                    f'{pep_page_url}\n'
+                    f'Статус в карточке: {pep_status}\n'
+                    f'Ожидаемые статусы: '
+                    f'{EXPECTED_STATUS[pep_list_status]}\n'
+                )
+        except (ConnectionError, ValueError, ParserFindTagException) as error:
+            errors.append(error)
+    for error in errors:
+        logging.error(error)
+    for message in messages:
+        logging.info(message)
     return [
         ('Статус', 'Количество'),
         *pep_statuses_count.items(),
@@ -149,11 +150,10 @@ def main():
         parser_mode = args.mode
         results = MODE_TO_FUNCTION[parser_mode](session)
 
-        if results is not None:
-            if parser_mode == 'pep':
-                file_output(results, args)
-            else:
-                control_output(results, args)
+        if parser_mode == 'pep':
+            file_output(results, args)
+        else:
+            control_output(results, args)
     except Exception as error:
         logging.error(f'Ошибка: {error}')
     logging.info('Парсер завершил работу.')
